@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hostel Hisab</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial;background:#f1f5f3;color:#183b32}
+header{background:#176b55;color:white;padding:22px;text-align:center}
+main{max-width:900px;margin:20px auto;padding:12px}
+.card{background:white;padding:20px;margin-bottom:16px;border-radius:14px;box-shadow:0 3px 12px #0001}
+input,select,button{width:100%;padding:12px;margin:7px 0;border:1px solid #ddd;border-radius:8px;font-size:15px}
+button{background:#176b55;color:white;border:0;cursor:pointer;font-weight:bold}
+button.secondary{background:#e6efea;color:#183b32}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.stat{padding:16px;background:#e3f4eb;border-radius:10px}
+.stat strong{display:block;font-size:22px;margin-top:6px}
+.entry{padding:12px;border-bottom:1px solid #eee;overflow-wrap:anywhere}
+.hidden{display:none}
+small{color:#64756e}
+@media(min-width:650px){.grid{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<header>
+<h1>₹ Hostel Hisab</h1>
+<p>Manage expenses, udhaar and balance</p>
+</header>
+
+<main>
+<section class="card" id="auth">
+<h2>Login / Create Account</h2>
+<input id="email" type="email" placeholder="Email address" autocomplete="email">
+<input id="password" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
+<button id="signup">Create Account</button>
+<button id="login" class="secondary">Login</button>
+<button id="googleLogin" style="background: #4285F4; color: white; margin-top: 10px;">Sign in with Google</button>
+<p id="authMsg" role="status"></p>
+</section>
+
+<section id="app" class="hidden">
+<div class="card">
+<h2 id="welcome">My Hisab</h2>
+<button id="logout" class="secondary">Logout</button>
+<div class="grid">
+<div class="stat">Balance<strong id="balance">₹0</strong></div>
+<div class="stat">Expenses<strong id="expenses">₹0</strong></div>
+<div class="stat">To Receive<strong id="receive">₹0</strong></div>
+<div class="stat">To Pay<strong id="pay">₹0</strong></div>
+</div>
+</div>
+
+<div class="card">
+<h2>Starting Balance</h2>
+<input id="opening" type="number" min="0" step="0.01" placeholder="Money you have now">
+<button id="saveOpening">Save Starting Balance</button>
+</div>
+
+<div class="card">
+<h2>Add Transaction</h2>
+<form id="transactionForm">
+<select id="type">
+<option value="expense">General Expense — Personal Kharcha</option>
+<option value="mess">Mess / Food — Khana khaya</option>
+<option value="canteen">Canteen / Snacks</option>
+<option value="income">Money received / Pocket money</option>
+<option value="lent">Udhaar given — Dost ko diye</option>
+<option value="borrowed">Udhaar taken — Dost se liye</option>
+<option value="collected">Udhaar received back — Wapas mile</option>
+<option value="repaid">Udhaar repaid — Wapas kiye</option>
+</select>
+<input id="amount" type="number" min="0.01" step="0.01" placeholder="Amount in ₹" required>
+<input id="description" maxlength="100" placeholder="What was it for? (e.g. Maggie, Stationary)" required>
+<input id="person" maxlength="60" placeholder="Friend's name (required for udhaar only)">
+<input id="date" type="date" required>
+<button type="submit">Add Transaction</button>
+</form>
+</div>
+
+<div class="card">
+<h2>My Transaction History</h2>
+<div id="history">Loading...</div>
+</div>
+
+<div class="card">
+<h2>Friend-wise Udhaar</h2>
+<div id="friends"></div>
+</div>
+</section>
+</main>
+
+<script type="module">
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import {
+ getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+ onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPopup
+} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+import {
+ getFirestore, doc, getDoc, setDoc, collection, addDoc,
+ getDocs, deleteDoc, query, orderBy, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+
+const firebaseConfig = {
+ apiKey: "AIzaSyCDW6tBjiNPSQFPwBVaqnQQYN0yrxKHrUE",
+ authDomain: "hostel-expenses-a23fd.firebaseapp.com",
+ projectId: "hostel-expenses-a23fd",
+ storageBucket: "hostel-expenses-a23fd.firebasestorage.app",
+ messagingSenderId: "161616201982",
+ appId: "1:161616201982:web:fa065d3d2e2247e9587daf"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const $ = id => document.getElementById(id);
+let currentUser = null;
+let transactions = [];
+let opening = 0;
+let busy = false;
+
+$("date").value = new Date().toLocaleDateString("en-CA");
+
+$("signup").onclick = async () => {
+ try {
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  await createUserWithEmailAndPassword(auth,email,password);
+  $("authMsg").textContent = "Account created!";
+ } catch(e) { $("authMsg").textContent = e.message; }
+};
+
+$("login").onclick = async () => {
+ try {
+  await signInWithEmailAndPassword(
+   auth,$("email").value.trim(),$("password").value
+  );
+  $("authMsg").textContent = "";
+ } catch(e) { $("authMsg").textContent = e.message; }
+};
+
+$("logout").onclick = () => signOut(auth);
+
+$("googleLogin").onclick = async () => {
+ try {
+  const provider = new GoogleAuthProvider();
+  await signInWithPopup(auth, provider);
+  $("authMsg").textContent = "Google Sign-in Successful!";
+ } catch(e) { $("authMsg").textContent = e.message; }
+};
+
+onAuthStateChanged(auth, async user => {
+ currentUser = user;
+ $("auth").classList.toggle("hidden",!!user);
+ $("app").classList.toggle("hidden",!user);
+ if(user) {
+  $("welcome").textContent = "My Hisab — " + (user.displayName || user.email);
+  await loadData();
+ }
+});
+
+function userDoc() {
+ return doc(db,"users",currentUser.uid);
+}
+function transactionCollection() {
+ return collection(db,"users",currentUser.uid,"transactions");
+}
+
+$("saveOpening").onclick = async () => {
+ const value = Number($("opening").value);
+ if(!Number.isFinite(value) || value < 0) {
+  alert("Enter a valid starting balance."); return;
+ }
+ try {
+  await setDoc(userDoc(),{opening:value,email:currentUser.email},{merge:true});
+  opening = value;
+  render();
+  alert("Starting balance saved.");
+ } catch(e) { alert("Could not save: " + e.message); }
+};
+
+$("transactionForm").onsubmit = async event => {
+ event.preventDefault();
+ if(busy) return;
+ const type = $("type").value;
+ const amount = Number($("amount").value);
+ const description = $("description").value.trim();
+ const person = $("person").value.trim();
+ const date = $("date").value;
+
+ if(!Number.isFinite(amount) || amount <= 0 || !description || !date) {
+  alert("Please enter valid transaction details."); return;
+ }
+ if(["lent","borrowed","collected","repaid"].includes(type) && !person) {
+  alert("Enter your friend's name."); return;
+ }
+ if(["collected","repaid"].includes(type)) {
+  const key = person.toLowerCase();
+  const owed = transactions.reduce((sum,t) => {
+   if((t.person||"").trim().toLowerCase() !== key) return sum;
+   if(type==="collected") {
+    if(t.type==="lent") sum += t.amount;
+    if(t.type==="collected") sum -= t.amount;
+   } else {
+    if(t.type==="borrowed") sum += t.amount;
+    if(t.type==="repaid") sum -= t.amount;
+   }
+   return sum;
+  },0);
+  if(amount > Math.max(0,owed)+0.009 &&
+     !confirm("Recorded pending amount is "+rupees(Math.max(0,owed))+". Add anyway?")) return;
+ }
+ busy = true;
+ try {
+  // Instant UI update ke liye temporary ID ke sath local array mein push karein
+  const tempId = "temp_" + Date.now();
+  const newTx = { id: tempId, type, amount, description, person, date };
+  transactions.unshift(tempId ? newTx : null); // list ke shuru mein add hoga
+  
+  // Form reset turant karo taaki fast lage
+  $("transactionForm").reset();
+  $("date").value = new Date().toLocaleDateString("en-CA");
+  render(); // Turant calculator ki tarah screen update hogi
+
+  // Background mein Firebase par save karein
+  const docRef = await addDoc(transactionCollection(),{
+   type, amount, description, person, date, createdAt: serverTimestamp()
+  });
+  
+  // Real ID se temp ID replace kar do
+  newTx.id = docRef.id;
+ } catch(e) { 
+  alert("Could not save: "+e.message); 
+  await loadData(); // Error aane par server se sync karo
+ }
+ finally { busy = false; }
+};
+
+async function loadData() {
+ try {
+  const userSnap = await getDoc(userDoc());
+  opening = userSnap.exists() ? Number(userSnap.data().opening)||0 : 0;
+  $("opening").value = opening;
+  const snap = await getDocs(query(transactionCollection(),orderBy("date","desc")));
+  transactions = snap.docs.map(d=>({id:d.id,...d.data()}));
+  render();
+ } catch(e) {
+  alert("Could not load data. Check Firebase configuration and Firestore Security Rules. "+e.message);
+ }
+}
+
+function rupees(value) {
+ return new Intl.NumberFormat("en-IN",{
+  style:"currency",currency:"INR",maximumFractionDigits:2
+ }).format(value);
+}
+function esc(value) {
+ return String(value??"").replace(/[&<>"']/g,c=>({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+ })[c]);
+}
+
+function balanceEffect(t) {
+ return ["income","borrowed","collected"].includes(t.type) ? t.amount : -t.amount;
+}
+
+function render() {
+ let balance=opening, expenses=0, receive=0, pay=0;
+ for(const t of transactions) {
+  balance += balanceEffect(t);
+  if(["expense", "mess", "canteen"].includes(t.type)) expenses += t.amount;
+  if(t.type==="lent") receive += t.amount;
+  if(t.type==="collected") receive -= t.amount;
+  if(t.type==="borrowed") pay += t.amount;
+  if(t.type==="repaid") pay -= t.amount;
+ }
+ $("balance").textContent = rupees(balance);
+ $("expenses").textContent = rupees(expenses);
+ $("receive").textContent = rupees(Math.max(0,receive));
+ $("pay").textContent = rupees(Math.max(0,pay));
+
+ const labels={
+  expense:"General Expense", mess:"Mess / Food", canteen:"Canteen",
+  income:"Money received", lent:"Udhaar given",
+  borrowed:"Udhaar taken", collected:"Udhaar received back", repaid:"Udhaar repaid"
+ };
+
+ $("history").innerHTML = transactions.length ? transactions.map(t=>`
+  <div class="entry">
+   <b>${esc(t.description)}</b> — ${rupees(t.amount)}
+   <br><small>${esc(labels[t.type]||t.type)} · ${esc(t.date)}${t.person?" · Friend: "+esc(t.person):""}</small>
+   <button class="secondary" type="button" data-delete="${esc(t.id)}" style="margin-top:6px; padding:6px 12px; width:auto;">Delete</button>
+  </div>`).join("") : "<p>No transactions yet.</p>";
+
+ const friends={};
+ for(const t of transactions) {
+  if(!t.person) continue;
+  const key = t.person.trim().toLowerCase();
+  if(!friends[key]) friends[key] = {name:t.person, receive:0, pay:0};
+  if(t.type==="lent") friends[key].receive += t.amount;
+  if(t.type==="collected") friends[key].receive -= t.amount;
+  if(t.type==="borrowed") friends[key].pay += t.amount;
+  if(t.type==="repaid") friends[key].pay -= t.amount;
+ }
+ const rows = Object.values(friends).filter(f => f.receive > .009 || f.pay > .009);
+ $("friends").innerHTML = rows.length ? rows.map(f=>`
+  <div class="entry"><b>${esc(f.name)}</b>
+   <br><small>To receive: ${rupees(Math.max(0,f.receive))} · To pay: ${rupees(Math.max(0,f.pay))}</small>
+  </div>`).join("") : "No pending udhaar.";
+}
+
+// Lightning fast instant delete on UI, sync with Firebase in background
+$("history").onclick = async event => {
+ const id = event.target.dataset.delete;
+ if(!id) return;
+ if(!confirm("Kya aap waqai is transaction ko delete karna chahte hain?")) return;
+ 
+ try {
+  // Pehle local array se turant hatao aur screen render karo (Zero lag)
+  transactions = transactions.filter(t => t.id !== id);
+  render();
+
+  // Background mein Firebase se delete karo
+  if(!id.startsWith("temp_")) {
+   await deleteDoc(doc(db,"users",currentUser.uid,"transactions",id));
+  }
+ } catch(e) { 
+  alert("Could not delete: "+e.message); 
+  await loadData(); 
+ }
+};
+</script>
+</body>
+</html>
